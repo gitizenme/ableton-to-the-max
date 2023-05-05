@@ -16,6 +16,7 @@
 	<param name="texcoord" type="vec2" state="TEXCOORD" />
 	<param name="color" type="vec4" state="COLOR" />
 
+	<param name="uColor" type="vec4" default="0 0 0 1" />
 	<param name="uTime" type="float" default="0" />
 
 	<language name="glsl" version="1.5">
@@ -29,6 +30,7 @@
 		<bind param="campos" program="vp" />
 
 		<bind param="resolution" program="fp" />
+		<bind param="uColor" program="fp" />
 		<bind param="uTime" program="fp" />
 
 
@@ -58,7 +60,7 @@ out jit_PerVertex {
 } jit_out;
 	
 void main() {	
-	gl_Position = modelViewProjectionMatrix * vec4(position, 1.);	
+	// gl_Position = modelViewProjectionMatrix * vec4(position, 1.);	
 
 	// surface normals from the cube
 	jit_out.jit_Surface_normal = transpose(inverse(mat3x3(modelViewMatrix))) * normal;
@@ -103,7 +105,7 @@ out vec4 color;
 // by Martijn Steinrucken aka BigWings/The Art of Code - 2022
 // License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
 
-#define AA 2
+#define AA 1
 #define TAU 6.283185
 
 #define MAX_STEPS 300
@@ -216,93 +218,94 @@ vec3 RayPlane(vec3 ro, vec3 rd, vec3 p, vec3 n) {
 
 void main()
 {
-	vec2 fragCoord = gl_FragCoord.xy; // built-in variable
-	vec2 m = position.xy/resolution.xy;
-	float t = uTime*.1;
-	vec3 col = vec3(uColor.rgb);
-	
-	vec3 ro = vec3(0, 1, -1)*2.;
-	ro.yz *= Rot(-m.y*3.14+1.);
-	ro.xz *= Rot(-m.x*6.2831+0.*.05);
-	ro.y = max(ro.y, -.9);
-	
-	for(int x=0; x<AA; x++) {
-		for(int y=0; y<AA; y++) {
-			vec2 offs = vec2(x, y)/float(AA) -.5;
+    vec2 m = vec2(1., -10.)/resolution.xy;
+    float t = uTime*.1;
+    vec3 col = vec3(0);
+    
+    vec3 ro = vec3(0, 1, -1)*2.;
+    ro.yz *= Rot(-m.y*3.14+1.);
+    ro.xz *= Rot(-m.x*6.2831+uTime*.05);
+    ro.y = max(ro.y, -.9);
+    
+    for(int x=0; x<AA; x++) {
+        for(int y=0; y<AA; y++) {
+            vec2 offs = vec2(x, y)/float(AA) -.5;
 
-			vec2 uv = (fragCoord+offs-.5*resolution.xy)/resolution.y;
-			vec3 rd = R(uv, ro, vec3(0,0,0), 1.);
+            vec2 uv = (gl_FragCoord.xy+offs-.5*resolution.xy)/resolution.y;
+            vec3 rd = R(uv, ro, vec3(0,0,0), 1.);
 
-			float dist = RayMarch(ro, rd).x;
-			
-			vec3 lightPos = vec3(0);
-			vec3 shadowPos = lightPos+normalize(ro-lightPos);
-			vec3 p = ro + rd * dist;
-			if(dist<MAX_DIST) {
-				
-				vec3 l = normalize(lightPos-p);
-				vec3 n = GetNormal(p);
+            float dist = RayMarch(ro, rd).x;
+            
+            vec3 lightPos = vec3(0);
+            vec3 shadowPos = lightPos+normalize(ro-lightPos);
+            vec3 p = ro + rd * dist;
+            if(dist<MAX_DIST) {
+                
+                vec3 l = normalize(lightPos-p);
+                vec3 n = GetNormal(p);
 
-				float dif = clamp(dot(n, l)*.5+.5, 0., 1.);
+                float dif = clamp(dot(n, l)*.5+.5, 0., 1.);
 
-				vec2 d = RayMarch(lightPos, l);
+                vec2 d = RayMarch(lightPos, l);
 
-				float shadow = length(p)<1.03 ? 1. : smoothstep(SURF_DIST, SURF_DIST*20., d.y)*.6+.4;
-				float falloff = min(1., 1./length(p.xz));               
+                float shadow = length(p)<1.03 ? 1. : smoothstep(SURF_DIST, SURF_DIST*20., d.y)*.6+.4;
+                float falloff = min(1., 1./length(p.xz));               
 
-				dif *= shadow*falloff*falloff;
-				
-				col += dif;
-				
-				// ground glitter
-				if(p.y<-.9) {
-					vec2 st = p.xz;
-					float offs = dot(rd, vec3(10));
+                dif *= shadow*falloff*falloff;
+                
+                col += dif;
+                
+                // ground glitter
+                if(p.y<-.9) {
+                    vec2 st = p.xz;
+                    float offs = dot(rd, vec3(10));
 
-					st.x += t*1.3;
-					float glitter = GlitterLayer(st*10., offs);
-					glitter += GlitterLayer(st*17.+3.1, offs);
-					glitter += GlitterLayer(st*23.+23.1, offs);
-					col += pow(glitter,5.)*falloff*shadow*shadow;
-				}
-			}
-			// center light
-			float centerDist = length(uv);
-			float g = Gyroid(shadowPos);
-			float light = smoothstep(0., .03, g);
-			col += min(10., light*.02/max(centerDist,1e-3))*vec3(1.,.8,.9);
-			
-			// volumetric starburst
-			float sb = max(0., Gyroid(normalize(RayPlane(ro, rd, vec3(0), normalize(ro)))));
-			sb *= 3.*smoothstep(-.2,.1, centerDist-.4);
-			col += sb;
-			
-			// SSS
-			float sss = max(0., 1.-dot(uv, uv)*25.);
-			sss *= sss;
-			sss *= smoothstep(2.5,2., dist); // only on the front
-			sss *= 1.-light*.5;
-			
-			float vein = smoothstep(-.01,.02, Gyroid(p+sin(p*30.+uTime)*.01)+.03);
-			// float vein = smoothstep(-.01,.02, Gyroid(p+sin(p*30.)*.01)+.03);
-			sss *= vein;
-			col += sss*vec3(1,.1,.1);
-			col += vec3(1,0,0)*(1.-vein)*sss;
-		}
-	}
-	
-	col /= float(AA*AA);
-	
-	float pulse = pow(sin(uTime)*.5+.5, 150.);
-	float k = sin(uTime)+sin(uTime*5.)*.5+sin(uTime*17.)*.25+sin(uTime*37.)*.1;
-	col *= 1.+k*.2;
-	
-	vec2 uv = (fragCoord-.5*resolution.xy)/resolution.y;
-	col *= 1.-dot(uv,uv);
-	
-	col /= col+3.; col *= 3.; // tone mapping 
-	
-	color = vec4(col,1.0);
+                    st.x += t*1.3;
+                    float glitter = GlitterLayer(st*10., offs);
+                    glitter += GlitterLayer(st*17.+3.1, offs);
+                    glitter += GlitterLayer(st*23.+23.1, offs);
+                    col += pow(glitter,5.)*falloff*shadow*shadow;
+                }
+            }
+            // center light
+            float centerDist = length(uv);
+            float g = Gyroid(shadowPos);
+            float light = smoothstep(0., .03, g);
+            col += min(10., light*.02/max(centerDist,1e-3))*vec3(1.,.8,.9);
+            
+            // volumetric starburst
+            float sb = max(0., Gyroid(normalize(RayPlane(ro, rd, vec3(0), normalize(ro)))));
+            sb *= 3.*smoothstep(-.2,.1, centerDist-.4);
+            col += sb;
+            
+            // SSS
+            float sss = max(0., 1.-dot(uv, uv)*25.);
+            sss *= sss;
+            sss *= smoothstep(2.5,2., dist); // only on the front
+            sss *= 1.-light*.5;
+            vec3 P = p;
+            
+            float vein = smoothstep(-.01,.02, Gyroid(P+sin(P*30.+uTime)*.01)+.03);
+            sss *= vein;
+            col += sss*vec3(1,.1,.1);
+            col += vec3(1,0,0)*(1.-vein)*sss;
+        }
+    }
+    
+    // col /= float(AA*AA);
+    
+    float pulse = pow(sin(uTime)*.5+.5, 150.);
+    t = uTime;
+    float k = sin(t)+sin(t*5.)*.5+sin(t*17.)*.25+sin(t*37.)*.1;
+    col *= 1.+k*.2;
+    
+    vec2 uv = (gl_FragCoord.xy-.5*resolution.xy)/resolution.y;
+    col *= 1.-dot(uv,uv);
+    
+    col /= col+3.; col *= 3.; // tone mapping 
+    
+	float pct = abs(sin(uTime / 1.0));
+    color = vec4(mix(uColor.rgb, col.rgb, pct), uColor.a);
 }
 
 	]]>
